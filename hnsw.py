@@ -5,17 +5,16 @@ import time
 import random
 from math import log2
 from heapq import heapify, heappop, heappush, heapreplace, nlargest, nsmallest
-
-def l2_distance(a, b):
-    return np.linalg.norm(a - b)
+from tqdm import tqdm
 
 def heuristic(candidates, curr, k, distance_func, data):
+    # print("current candidates: %s" % candidates)
     candidates = sorted(candidates, key=lambda a: a[1])
     result_indx_set = {candidates[0][0]}
     result = [candidates[0]]
     added_data = [ data[candidates[0][0]] ]
     for c, curr_dist in candidates[1:]:
-        c_data = data[c]       
+        c_data = data[c]
         if curr_dist < min(map(lambda a: distance_func(c_data, a), added_data)):
             result.append( (c, curr_dist))
             result_indx_set.add(c)
@@ -23,11 +22,61 @@ def heuristic(candidates, curr, k, distance_func, data):
     for c, curr_dist in candidates: # optional. uncomment to build neighborhood exactly with k elements.
         if len(result) < k and (c not in result_indx_set):
             result.append( (c, curr_dist) )
-    
+
     return result
+
+def optimized_heuristic(candidates, curr, k, distance_func, data, far_edge_ratio=0.01):
+    candidates.sort(key=lambda a: a[1])
+    result_indx_set = set()
+    result = []
+    added_data = []
+    
+    if candidates:
+        closest = candidates[0]
+        result.append(closest)
+        result_indx_set.add(closest[0])
+        added_data.append(data[closest[0]])
+
+    for c, curr_dist in candidates[1:]:
+        if c in result_indx_set:
+            continue
+        
+        c_data = data[c]
+        min_distance = float('inf')
+        
+        for a in added_data:
+            min_distance = min(min_distance, distance_func(c_data, a))
+            # Early exit if min_distance is already greater than current distance
+            if curr_dist >= min_distance:
+                break
+        
+        if curr_dist < min_distance:
+            result.append((c, curr_dist))
+            result_indx_set.add(c)
+            added_data.append(c_data)
+
+    if len(candidates) > k:
+        num_far_edges = max(1, int(far_edge_ratio * k))
+        # Select farthest candidates directly without additional sorting
+        far_candidates = candidates[-num_far_edges:]
+        for c, curr_dist in far_candidates:
+            if c not in result_indx_set:
+                result.append((c, curr_dist))
+                result_indx_set.add(c)
+
+    for c, curr_dist in candidates:
+        if len(result) >= k:
+            break
+        if c not in result_indx_set:
+            result.append((c, curr_dist))
+            result_indx_set.add(c)
+
+    return result
+
+
 def k_closest(candidates: list, curr, k, distance_func, data):
     return sorted(candidates, key=lambda a: a[1])[:k]
-    
+
 class HNSW:
     # self._graphs[level][i] contains a {j: dist} dictionary,
     # where j is a neighbor of i and dist is distance
@@ -37,9 +86,15 @@ class HNSW:
 
     def vectorized_distance_(self, x, ys):
         return [self.distance_func(x, y) for y in ys]
+    
+    def _l2_distance(self, a, b):
+        return np.linalg.norm(a - b)
 
-    def __init__(self, distance_func, m=5, ef=10, ef_construction=30, m0=None, neighborhood_construction=heuristic, vectorized=False):
+    def __init__(self, distance_type, m=15, ef=10, ef_construction=30, m0=None, neighborhood_construction=optimized_heuristic, vectorized=False):
         self.data = []
+        if distance_type == "l2":
+            # l2 distance
+            distance_func = self._l2_distance
         self.distance_func = distance_func
         self.neighborhood_construction = neighborhood_construction
 
@@ -71,8 +126,6 @@ class HNSW:
 
         # level at which the element will be inserted
         level = int(-log2(random.random()) * self._level_mult) + 1
-        # print("level: %d" % level)
-
         # elem will be at data[idx]
         idx = len(data)
         data.append(elem)
@@ -94,7 +147,7 @@ class HNSW:
                 # ep = self._search_graph(elem, ep, layer, ef)
                 candidates = self.beam_search(graph=layer, q=elem, k=level_m*2, eps=[point], ef=self._ef_construction)
                 point = candidates[0][0]
-                
+
                 # insert in g[idx] the best neighbors
                 # layer[idx] = layer_idx = {}
                 # self._select(layer_idx, ep, level_m, layer, heap=True)
@@ -106,15 +159,15 @@ class HNSW:
                     candidates_j = layer[j] + [(idx, dist)]
                     neighbors_j = self.neighborhood_construction(candidates=candidates_j, curr=j, k=level_m, distance_func=self.distance_func, data=self.data)
                     layer[j] = neighbors_j
-                    
-                
+
+        # print("current graphs: %s" % len(graphs))
         for i in range(len(graphs), level):
             # for all new levels, we create an empty graph
             graphs.append({idx: []})
             self._enter_point = idx
-            
-    # can be used for search after jump        
-    def search(self, q, k=1, ef=10, level=0, return_observed=True):
+
+    # can be used for search after jump
+    def search(self, q, k=1, ef=10, level=0, return_observed=True, entry_points=None):
         graphs = self._graphs
         point = self._enter_point
         for layer in reversed(graphs[level:]):
@@ -185,6 +238,8 @@ class HNSW:
         if return_observed:
             return observed_sorted
         return observed_sorted[:k]
+
+
     def save_graph_plane(self, file_path):
         with open(file_path, "w") as f:
             f.write(f'{len(self.data)}\n')
@@ -195,7 +250,7 @@ class HNSW:
 
             for graph in self._graphs:
                 for src, neighborhood in graph.items():
-                    for dst, dist in neighborhood: 
+                    for dst, dist in neighborhood:
                         f.write(f'{src} {dst}\n')
 
 
