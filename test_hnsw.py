@@ -9,8 +9,9 @@ from heapq import heappush, heappop
 import random
 import itertools
 random.seed(108)
+from hnsw_mine import HNSW_mine
 from hnsw import HNSW
-from hnsw import l2_distance, heuristic
+from matplotlib import pyplot as plt
 
 
 def brute_force_knn_search(distance_func, k, q, data):
@@ -31,8 +32,9 @@ def calculate_recall(distance_func, kg, test, groundtruth, k, ef, m):
     for query, true_neighbors in tqdm(zip(test, groundtruth), total=len(test)):
         true_neighbors = true_neighbors[:k]  # Use only the top k ground truth neighbors
         entry_points = random.sample(range(len(kg.data)), m)
-        observed = [neighbor for neighbor, dist in kg.search(q=query, k=k, ef=ef, return_observed = True)]
+        observed = [neighbor for neighbor, dist in kg.search(q=query, k=k, ef=ef)]
         total_calc = total_calc + len(observed)
+        # print(len(observed))
         results = observed[:k]
         intersection = len(set(true_neighbors).intersection(set(results)))
         # print(f'true_neighbors: {true_neighbors}, results: {results}. Intersection: {intersection}')
@@ -104,16 +106,12 @@ def main():
         train_data, test_data = generate_synthetic_data(args.dim, args.n, args.nq)
         groundtruth_data = None
 
-    # Create HNSW
+    hnsw = HNSW(distance_type="l2", m=args.M, m0=args.M0, ef=args.ef)
 
-    hnsw = HNSW( distance_func=l2_distance, m=args.M, m0=args.M0, ef=10, ef_construction=30,  neighborhood_construction = heuristic)
-    # Add data to HNSW
     for x in tqdm(train_data):
         hnsw.add(x)
-
-
     # Calculate recall
-    recall, avg_cal = calculate_recall(l2_distance, hnsw, test_data, groundtruth_data, k=args.k, ef=args.ef, m=args.m)
+    recall, avg_cal = calculate_recall(hnsw._l2_distance, hnsw, test_data, groundtruth_data, k=args.k, ef=args.ef, m=args.m)
     print(f"Average recall: {recall}, avg calc: {avg_cal}")
 
 if __name__ == "__main__":
